@@ -1,4 +1,4 @@
-# Application routing add-on for AKS internals
+# Application routing add-on for AKS training
 
 The application routing add-on with NGINX delivers the following:
 
