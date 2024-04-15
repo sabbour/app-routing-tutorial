@@ -96,14 +96,14 @@ spec:
   ingressClassName: webapprouting.kubernetes.azure.com
   rules:
   - http:
-      path: /
-        pathType: Prefix
       paths:
-      - backend:
-          service:
-            name: aks-helloworld
-            port:
-              number: 80
+        - path: /
+          pathType: Prefix
+          backend:
+            service:
+              name: frontend
+              port:
+                number: 80
 ```          
 
 ### Create a namespace and apply the files
