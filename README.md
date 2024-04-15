@@ -179,14 +179,14 @@ spec:
   rules:
   - http:
       host: helloworld.<ZoneName>
-      path: /
-        pathType: Prefix
       paths:
-      - backend:
-          service:
-            name: aks-helloworld
-            port:
-              number: 80
+        - path: /
+          pathType: Prefix
+          backend:
+            service:
+              name: frontend
+              port:
+                number: 80
 ```
 
 ### Apply the modified ingress
@@ -311,10 +311,10 @@ spec:
   rules:
   - http:
       host: helloworld.<ZoneName>
-      path: /
-        pathType: Prefix
       paths:
-      - backend:
+      - path: /
+        pathType: Prefix
+        backend:
           service:
             name: aks-helloworld
             port:
