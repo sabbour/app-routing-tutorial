@@ -12,26 +12,41 @@ The add-on runs the [application routing operator](https://github.com/Azure/aks-
 In Kubernetes, an ingress is an API object that manages external access to services within a cluster. It acts as a traffic controller, routing incoming requests to the appropriate services based on rules defined in the ingress resource. It provides a way to expose HTTP and HTTPS routes to services, enabling external access to applications running in the cluster.
 
 ## Create a cluster with the add-on enabled
+Start by creating some required environment variables
+```bash
+RGNAME=<ResourceGroupName>
+LOCATION=<Location>
+CLUSTERNAME=<ClusterName>
+KVNAME=<KeyVaultName> # must be globally unique
+KVCERTNAME=<KeyVaultCertificateName>
+```
+
+Now make sure you have the latest version of Azure CLI. This Addon went GA in early 2024 and will need a fairly new version of Azure CLI to work.
+
+```bash
+az upgrade
+```
+If you do not have a
 
 ### Create a resource group
 
 ```bash
-az group create -n <ResourceGroupName> -l <Location>
+az group create -n $RGNAME -l $LOCATION
 ```
 
 ### Create a cluster
 
-This will create a cluster with the add-on enabled. The default controller that comes with this cluster will have a public IP address.
+This will create a cluster with the add-on enabled. The default controller that comes with this cluster will have a public IP address. For more information on how to configure nginx to use a private IP address, check out [Advanced NGINX ingress controller and ingress configurations with the application routing add-on](https://learn.microsoft.com/en-us/azure/aks/app-routing-nginx-configuration)
 
 
 ```bash
-az aks create -g <ResourceGroupName> -n <ClusterName> -l <Location> --enable-app-routing
+az aks create -g $RGNAME -n $CLUSTERNAME -l $LOCATION --enable-app-routing
 ```
 
 ### Get the cluster credentials
 
 ```bash
-az aks get-credentials -g <ResourceGroupName> -n <ClusterName>
+az aks get-credentials -g $RGNAME -n $CLUSTERNAME
 ```
 
 
@@ -97,13 +112,13 @@ spec:
   rules:
   - http:
       paths:
-        - path: /
-          pathType: Prefix
-          backend:
-            service:
-              name: frontend
-              port:
-                number: 80
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: aks-helloworld
+            port:
+              number: 80
 ```          
 
 ### Create a namespace and apply the files
@@ -146,9 +161,12 @@ Open a web browser to the external IP address of your ingress to see the app in 
 You can configure the application routing add-on to automatically configure DNS entries on Azure DNS for ingresses that you create.
 
 ### Create a public Azure DNS Zone
+If you have domain name you can use for this exercise,use that as your DNSZONENAME. Otherwise you can use Otherwise you can use nip.io. For the latter option, you would just use your ingress controller's IP address as your domain name. So if your IP adress is 4.255.22.196, your DNSZONENAME would be 4-255-22-196.nip.io
+
+DNSZONENAME=<ZoneName> # must have at least 2 labels (eg. testing.com. testing is the first label and com is the second)
 
 ```bash
-az network dns zone create -g <ResourceGroupName> -n <ZoneName>
+az network dns zone create -g $RGNAME -n $DNSZONENAME
 ```
 
 ### Attach Azure DNS zone to the application routing add-on
@@ -156,18 +174,20 @@ az network dns zone create -g <ResourceGroupName> -n <ZoneName>
 Retrieve the resource ID for the DNS zone using the `az network dns zone show` command and set the output to a variable named `ZONEID`.
 
 ```bash
-ZONEID=$(az network dns zone show -g <ResourceGroupName> -n <ZoneName> --query "id" --output tsv)
+ZONEID=$(az network dns zone show -g $RGNAME -n $DNSZONENAME --query "id" --output tsv)
 ```
 
 Update the add-on to enable the integration with Azure DNS using the `az aks approuting zone` command. You can pass a comma-separated list of DNS zone resource IDs.
 
+Note: You might need to run the command `export MSYS_NO_PATHCONV=1` to prevent windows from automatically converting your ZONEID
+
 ```bash
-az aks approuting zone add -g <ResourceGroupName> -n <ClusterName> --ids=${ZONEID} --attach-zones
+az aks approuting zone add -g $RGNAME -n $CLUSTERNAME --ids=${ZONEID} --attach-zones
 ```
 
 ### Update the ingress object to use a hostname
 
-Update the file `ingress.yaml` with the following contents. Replace `<ZoneName>` with a name of the zone you created earlier.
+Update the file `ingress.yaml` with the following contents. **Replace `<ZoneName>` with a name of the zone you created earlier.**
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -177,16 +197,16 @@ metadata:
 spec:
   ingressClassName: webapprouting.kubernetes.azure.com
   rules:
-  - http:
-      host: helloworld.<ZoneName>
+  - host: helloworld.<ZoneName> # eg helloworld.tesing.com
+    http:
       paths:
-        - path: /
-          pathType: Prefix
-          backend:
-            service:
-              name: frontend
-              port:
-                number: 80
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: aks-helloworld
+            port:
+              number: 80
 ```
 
 ### Apply the modified ingress
@@ -196,9 +216,12 @@ kubectl apply -n helloworld -f ingress.yaml
 ```
 
 ### Verify the ingress was changed
-
-
 ```bash
+kubectl get ingress aks-helloworld -n helloworld 
+```
+
+
+```output
 NAME             CLASS                                HOSTS               ADDRESS       PORTS     AGE
 aks-helloworld   webapprouting.kubernetes.azure.com   myapp.contoso.com   20.51.92.19   80, 443   4m
 ```
@@ -208,7 +231,7 @@ aks-helloworld   webapprouting.kubernetes.azure.com   myapp.contoso.com   20.51.
 In a few minutes, the Azure DNS zone will be reconfigured with a new `A` record pointing to the IP address of the NGINX ingress controller.
 
 ```bash
-az network dns record-set a list -g <ResourceGroupName> -n <ZoneName>
+az network dns record-set a list -g $RGNAME -z $DNSZONENAME
 ```
 
 The following example output shows the created record:
@@ -242,7 +265,7 @@ The application routing add-on can be integrated with Azure Key Vault to retriev
 ### Create an Azure Key Vault to store the certificate
 
 ```bash
-az keyvault create -g <ResourceGroupName> -l <Location> -n <KeyVaultName> --enable-rbac-authorization true
+az keyvault create -g $RGNAME -l $LOCATION -n $KVNAME --enable-rbac-authorization true
 ```
 
 ### Create and export a self-signed SSL certificate
@@ -253,7 +276,7 @@ For testing, you can use a self-signed public certificate instead of a Certifica
 openssl req -new -x509 -nodes -out aks-ingress-tls.crt -keyout aks-ingress-tls.key -subj "/CN=<Hostname>" -addext "subjectAltName=DNS:<Hostname>"
 ```
 
-Export the SSL certificate and skip the password prompt using the `openssl pkcs12 -export` command.
+Export the SSL certificate and skip the password prompt using the `openssl pkcs12 -export` command. Hit enter multiple times to export it with no passwords.
 
 ```bash
 openssl pkcs12 -export -in aks-ingress-tls.crt -inkey aks-ingress-tls.key -out aks-ingress-tls.pfx
@@ -262,9 +285,10 @@ openssl pkcs12 -export -in aks-ingress-tls.crt -inkey aks-ingress-tls.key -out a
 ### Import certificate into Azure Key Vault
 
 Import the SSL certificate into Azure Key Vault using the `az keyvault certificate import` command. If your certificate is password protected, you can pass the password through the `--password` flag.
+NOTE: If you encouter "not authorized" error, you might have to go to your Azure portal and provide yourself Access. In this case, for demo purposes provide yourself `Key Vault Administrator` access.
 
 ```bash
-az keyvault certificate import --vault-name <KeyVaultName> -n <KeyVaultCertificateName> -f aks-ingress-tls.pfx [--password <certificate password if specified>]
+az keyvault certificate import --vault-name $KVNAME -n $KVCERTNAME -f aks-ingress-tls.pfx [--password <certificate password if specified>]
 ```
 
 ### Enable Azure Key Vault integration
@@ -272,13 +296,13 @@ az keyvault certificate import --vault-name <KeyVaultName> -n <KeyVaultCertifica
 Retrieve the Azure Key Vault resource ID.
 
 ```bash
-KEYVAULTID=$(az keyvault show --name <KeyVaultName> --query "id" --output tsv)
+KEYVAULTID=$(az keyvault show --name $KVNAME --query "id" --output tsv)
 ```
 
 Then update the app routing add-on to enable the Azure Key Vault secret store CSI driver and apply the role assignment.
 
 ```bash
-az aks approuting update -g <ResourceGroupName> -n <ClusterName> --enable-kv --attach-kv ${KEYVAULTID}
+az aks approuting update -g $RGNAME -n $CLUSTERNAME --enable-kv --attach-kv ${KEYVAULTID}
 ```
 
 ### Retrieve the certificate URI from Azure Key Vault
@@ -286,7 +310,7 @@ az aks approuting update -g <ResourceGroupName> -n <ClusterName> --enable-kv --a
 Get the certificate URI to use in the Ingress from Azure Key Vault using the `az keyvault certificate show` command.
 
 ```bash
-az keyvault certificate show --vault-name <KeyVaultName> -n <KeyVaultCertificateName> --query "id" --output tsv
+az keyvault certificate show --vault-name $KVNAME -n $KVCERTNAME --query "id" --output tsv
 ```
 
 The following example output shows the certificate URI returned from the command:
@@ -309,8 +333,8 @@ metadata:
 spec:
   ingressClassName: webapprouting.kubernetes.azure.com
   rules:
-  - http:
-      host: helloworld.<ZoneName>
+  - host: helloworld.<ZoneName>
+    http:
       paths:
       - path: /
         pathType: Prefix
@@ -330,6 +354,13 @@ spec:
 ```bash
 kubectl apply -n helloworld -f ingress.yaml
 ```
+
+## Test your app running with TLS
+You just deployed your ingress controller with TLS configured using a self signed certificate. Do not use this for production workloads, this is for demo purposes only. The steps you completed allowed you to create the certificate and store it in Key vault. You then provided the ingress controller access to pull the certificate from keyvault and use it to configure TLS for your ingress resources. If you were using a CA certificate, you would't get the "Connection not safe" warning, but in the meantime you can still test this on your browser for demo purposed.
+
+Go to your browser and enter url starting with https: https://helloworld.<ZoneName> eg https://helloworld.20-241-145-159.nip.io/. Ignore the warnings to access the app running on the browser.
+
+![TLS successfully configured](./media/app-running-tls.png)
 
 ## Understand the `NginxIngressController` custom resource
 
